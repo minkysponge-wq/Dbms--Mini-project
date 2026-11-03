@@ -1,0 +1,10 @@
+# Core
+PyMySQL>=1.1.0          # MySQL / MariaDB driver
+pymongo>=4.6.0          # MongoDB driver
+bcrypt>=4.1.0           # password hashing for the seed script
+
+# Testing only: lets the MongoDB test suite run with no server installed
+mongomock>=4.1.2
+
+# Docs only: regenerates the ER and schema diagrams
+graphviz>=0.20.1
