@@ -71,8 +71,10 @@ generated on write.
 
 ## 6. DML operations — 4 marks
 
-`sql/06_queries.sql` sections 1–8, plus every write path in
-`raft/store.py` and `sql/04_procedures.sql`.
+`sql/06_queries.sql` sections 1–9, plus every write path in
+`raft/store.py` and `sql/04_procedures.sql`. Section 9 shows each INSERT
+form inside a transaction that rolls back, so running the file leaves
+the seeded data unchanged.
 
 INSERT (including `INSERT ... ON DUPLICATE KEY UPDATE` and
 `INSERT IGNORE`), UPDATE (including multi-table `UPDATE ... JOIN`),
@@ -218,10 +220,11 @@ Yours to earn. What helps:
 - The topic is not a CRUD application. A consensus algorithm with MySQL
   as its storage engine is unusual, and the integration is the
   interesting part.
-- Three bugs were found by testing and are documented in
-  `docs/DESIGN.md`: the `client_session` key error that made replicas
-  diverge, the missing no-op append that left entries uncommitted after
-  failover, and the per-request clerk that tripped the deduplication.
+- Bugs found by testing are documented in `docs/DESIGN.md` §7: the
+  `client_session` key error that made replicas diverge, the missing
+  no-op append that left entries uncommitted after failover, the
+  per-request clerk that tripped the deduplication, and InnoDB deadlocks
+  between replicas that made the applier skip entries.
 - Be able to explain, from understanding: why the `vote` primary key is
   composite, why `_advance_commit_index` has a term check (Figure 8), and
   why reads go through the log.
@@ -237,7 +240,7 @@ Yours to earn. What helps:
 | 3 | DDL with constraints | 4 | 17 tables, 23 FKs, 6 checks, 7 unique, 24 indexes |
 | 4 | NoSQL/Vector creation | 4 | MongoDB collection, 5 indexes, 128-d embeddings |
 | 5 | Technology justification | 1 | `docs/TECH_JUSTIFICATION.md` |
-| 6 | DML operations | 4 | `sql/06_queries.sql` §1–8 |
+| 6 | DML operations | 4 | `sql/06_queries.sql` §1–9 |
 | 7 | Nested/correlated/recursive/join | 4 | 10 distinct query forms |
 | 8 | Procedure/function/trigger/CTE | 6 | 10 routines, 6 triggers, 2 CTE views |
 | 9 | NoSQL/Vector feature + RUD | 7 | Full CRUD, pipeline vector search, 19 tests |

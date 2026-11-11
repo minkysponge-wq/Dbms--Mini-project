@@ -95,9 +95,9 @@ ORDER BY term_number;
 -- This is the query a leader conceptually runs to decide what to send.
 SELECT n.node_id,
        (SELECT COUNT(*)
-          FROM log_entry lead
-         WHERE lead.node_id = (SELECT node_id FROM node WHERE role='leader' LIMIT 1)
-           AND lead.log_index NOT IN (
+          FROM log_entry ldr      -- not `lead`: reserved in MySQL 8 (LEAD())
+         WHERE ldr.node_id = (SELECT node_id FROM node WHERE role='leader' LIMIT 1)
+           AND ldr.log_index NOT IN (
                SELECT f.log_index FROM log_entry f WHERE f.node_id = n.node_id
            )
        ) AS entries_missing
@@ -256,9 +256,10 @@ UPDATE auth_session
    SET revoked = TRUE
  WHERE expires_at < NOW(6) AND revoked = FALSE;
 
--- 8.2 Retire client sessions with no requests in the last day. The
--- foreign key cascades the deletion to client_request.
-DELETE FROM client_session
+-- 8.2 Retire clients that opened over a day ago and never sent a
+-- request. The foreign keys cascade the deletion to every node's
+-- client_session row for that client.
+DELETE FROM client
  WHERE client_id NOT IN (SELECT DISTINCT client_id FROM client_request)
    AND opened_at < NOW(6) - INTERVAL 1 DAY;
 
@@ -268,3 +269,58 @@ UPDATE log_entry le
    SET le.committed = TRUE
  WHERE le.log_index <= n.commit_index
    AND le.committed = FALSE;
+
+
+-- =====================================================================
+-- 9. INSERT
+--
+-- Wrapped in a transaction and rolled back at the end, so running this
+-- file shows every form of INSERT without changing the seeded roles.
+-- The application's own writes use the same forms: see sp_append_entry
+-- and sp_apply_committed in 04_procedures.sql, and raft/store.py.
+-- =====================================================================
+
+START TRANSACTION;
+
+-- 9.1 Single-row INSERT: a new permission.
+INSERT INTO app_permission (permission_code, description)
+VALUES ('report.export', 'Export the audit log as a report');
+
+-- 9.2 Multi-row INSERT.
+INSERT INTO app_permission (permission_code, description) VALUES
+    ('report.schedule', 'Schedule a recurring report'),
+    ('report.share',    'Share a report with another user');
+
+-- 9.3 INSERT ... SELECT: grant every report.* permission to admin.
+INSERT INTO role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM app_role r
+JOIN app_permission p ON p.permission_code LIKE 'report.%'
+WHERE r.role_name = 'admin';
+
+-- 9.4 INSERT IGNORE: re-running a grant is a no-op, not an error,
+-- because (role_id, permission_id) is the primary key.
+INSERT IGNORE INTO role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM app_role r
+JOIN app_permission p ON p.permission_code = 'report.export'
+WHERE r.role_name = 'admin';
+
+-- 9.5 Upsert with INSERT ... ON DUPLICATE KEY UPDATE: permission_code is
+-- unique, so this updates the existing row's description.
+INSERT INTO app_permission (permission_code, description)
+VALUES ('report.export', 'Export the audit log as CSV or PDF')
+ON DUPLICATE KEY UPDATE description = VALUES(description);
+
+-- Evidence: admin now resolves the new permissions through the view.
+SELECT permission_code, description
+FROM app_permission
+WHERE permission_code LIKE 'report.%'
+ORDER BY permission_code;
+
+SELECT COUNT(*) AS admin_permissions_inside_transaction
+FROM v_role_effective_permission v
+JOIN app_role r ON r.role_id = v.role_id
+WHERE r.role_name = 'admin';
+
+ROLLBACK;

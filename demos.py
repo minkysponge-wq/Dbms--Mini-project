@@ -139,6 +139,8 @@ commits, then sees the updated state and refuses.
     db.execute("DELETE FROM vote WHERE term_number >= 900")
     db.execute("DELETE FROM term WHERE term_number >= 900")
     db.execute("INSERT INTO term (term_number) VALUES (900)")
+    saved = db.query_one(
+        "SELECT current_term, voted_for FROM node WHERE node_id = 2")
     db.execute("UPDATE node SET current_term = 900, voted_for = NULL "
                "WHERE node_id = 2")
 
@@ -160,7 +162,7 @@ commits, then sees the updated state and refuses.
                 cur.execute(
                     "INSERT INTO vote (term_number, voter_id, candidate_id, "
                     "granted, candidate_last_index, candidate_last_term) "
-                    "VALUES (900, 2, 0, TRUE, 0, 0)")
+                    "VALUES (900, 2, 0, TRUE, 1000000, 1000000)")
                 cur.execute("UPDATE node SET voted_for = 0 WHERE node_id = 2")
                 conn.commit()
                 results["c1"] = "granted"
@@ -185,7 +187,7 @@ commits, then sees the updated state and refuses.
                 cur.execute(
                     "INSERT INTO vote (term_number, voter_id, candidate_id, "
                     "granted, candidate_last_index, candidate_last_term) "
-                    "VALUES (900, 2, 1, TRUE, 0, 0)")
+                    "VALUES (900, 2, 1, TRUE, 1000000, 1000000)")
                 cur.execute("UPDATE node SET voted_for = 1 WHERE node_id = 2")
                 conn.commit()
                 results["c2"] = "granted"
@@ -221,6 +223,9 @@ commits, then sees the updated state and refuses.
     print("  duplicate outright. Two independent defences, both in the"
           " database.")
 
+    db.execute("UPDATE node SET current_term = %s, voted_for = %s "
+               "WHERE node_id = 2",
+               (saved["current_term"], saved["voted_for"]))
     db.execute("DELETE FROM vote WHERE term_number >= 900")
     db.execute("DELETE FROM term WHERE term_number >= 900")
 
@@ -311,7 +316,12 @@ measurable rather than asserted.
     query = ("SELECT node_id, log_index, key_name FROM log_entry "
              "WHERE command_type = 'APPEND' AND committed = TRUE")
 
-    db.execute("DROP INDEX IF EXISTS idx_log_cmd_committed ON log_entry")
+    # DROP INDEX IF EXISTS is MariaDB-only; MySQL 8 needs the lookup.
+    if db.query_one(
+            "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'log_entry' "
+            "AND INDEX_NAME = 'idx_log_cmd_committed'")["c"]:
+        db.execute("DROP INDEX idx_log_cmd_committed ON log_entry")
 
     existing = int(db.query_one("SELECT COUNT(*) AS c FROM log_entry")["c"])
     if existing < 4000:
@@ -454,7 +464,34 @@ the database refuses all of them.
     db.execute("DELETE FROM vote WHERE term_number >= 800")
     db.execute("DELETE FROM term WHERE term_number >= 800")
     db.execute("INSERT INTO term (term_number) VALUES (800), (801)")
+    saved_term = db.query_one(
+        "SELECT current_term FROM node WHERE node_id = 3")["current_term"]
     db.execute("UPDATE node SET current_term = 801 WHERE node_id = 3")
+
+    # "Log is behind" needs the voter (node 0) to hold at least one entry.
+    added_entry = None
+    if not db.query_one("SELECT COUNT(*) AS c FROM log_entry "
+                        "WHERE node_id = 0")["c"]:
+        db.execute("INSERT IGNORE INTO term (term_number) VALUES (1)")
+        db.execute("INSERT INTO log_entry (node_id, log_index, term_number, "
+                   "command_type) VALUES (0, 1, 1, 'NOOP')")
+        added_entry = (0, 1)
+
+    # "match_index backwards" needs a row whose match_index is above 0.
+    added_repl = None
+    if not db.query_one("SELECT COUNT(*) AS c FROM replication_state "
+                        "WHERE match_index > 0")["c"]:
+        pair = db.query_one(
+            "SELECT l.node_id AS leader_id, f.node_id AS follower_id "
+            "FROM node l JOIN node f ON f.node_id <> l.node_id "
+            "WHERE NOT EXISTS (SELECT 1 FROM replication_state r "
+            "  WHERE r.leader_id = l.node_id AND r.follower_id = f.node_id) "
+            "ORDER BY l.node_id, f.node_id LIMIT 1")
+        if pair:
+            db.execute("INSERT INTO replication_state (leader_id, follower_id, "
+                       "next_index, match_index) VALUES (%s, %s, 2, 1)",
+                       (pair["leader_id"], pair["follower_id"]))
+            added_repl = (pair["leader_id"], pair["follower_id"])
 
     attempts = [
         ("vote in a term below the voter's current term",
@@ -472,7 +509,7 @@ the database refuses all of them.
          "INSERT INTO replication_state (leader_id, follower_id) VALUES (1, 1)"),
         ("move match_index backwards",
          "UPDATE replication_state SET match_index = 0 "
-         "WHERE match_index > 0 LIMIT 1"),
+         "WHERE match_index > 0 ORDER BY leader_id, follower_id LIMIT 1"),
     ]
 
     for description, statement in attempts:
@@ -490,7 +527,7 @@ the database refuses all of them.
     print("\n  A cast vote is also immutable:")
     db.execute("INSERT IGNORE INTO vote (term_number, voter_id, candidate_id, "
                "granted, candidate_last_index, candidate_last_term) "
-               "VALUES (801, 3, 1, TRUE, 0, 0)")
+               "VALUES (801, 3, 1, TRUE, 1000000, 1000000)")
     try:
         db.execute("UPDATE vote SET candidate_id = 2 "
                    "WHERE term_number = 801 AND voter_id = 3")
@@ -510,7 +547,15 @@ the database refuses all of them.
         "WHERE node_id = 3 ORDER BY event_id DESC LIMIT 4"))
 
     db.execute("DELETE FROM vote WHERE term_number >= 800")
+    db.execute("UPDATE node SET current_term = %s WHERE node_id = 3",
+               (saved_term,))
     db.execute("DELETE FROM term WHERE term_number >= 800")
+    if added_entry:
+        db.execute("DELETE FROM log_entry WHERE node_id = %s "
+                   "AND log_index = %s", added_entry)
+    if added_repl:
+        db.execute("DELETE FROM replication_state WHERE leader_id = %s "
+                   "AND follower_id = %s", added_repl)
 
 
 # ---------------------------------------------------------------------

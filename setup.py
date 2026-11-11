@@ -244,7 +244,7 @@ def main() -> None:
     if not args.check:
         print("\nNext:")
         print("  python -m unittest discover -s tests    run the test suite")
-        print("  python demo.py                          narrated demo")
+        print("  python demos.py                         database concept demos")
         print("  python server.py                        start the cluster API")
         print("  cd dashboard && npm install && npm run dev")
 
