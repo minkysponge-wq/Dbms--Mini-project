@@ -151,7 +151,7 @@ a retry can reach a different replica and be replicated again.
 
 ---
 
-## 7. Three bugs found by testing
+## 7. Bugs found by testing
 
 These are worth reading; each one was invisible until a test caught it.
 
@@ -201,6 +201,30 @@ With a `CONTINUE HANDLER FOR NOT FOUND` in scope, the first lookup for an
 unknown client set `v_done = 1` and ended the loop after one entry.
 Symptom: three entries committed, one applied. Fixed with a scalar
 subquery, which yields NULL and raises nothing.
+
+### Deadlocked applies were skipped
+
+Every replica applies each committed entry at nearly the same moment,
+and those five transactions touch shared rows - the `client` row in
+particular. InnoDB detects the resulting deadlocks and rolls one back
+(error 1213). The applier wrote `last_applied` *before* applying and
+swallowed the exception, so the victim replica recorded the entry as
+applied when it never was. That replica silently lacked the key, and a
+read it served after a restart came back empty.
+
+Fixed in `RaftNode._applier`: `last_applied` is recorded only after the
+apply succeeds, and a failed apply is retried with backoff rather than
+skipped - the same lesson as the deadlock demo in `demos.py`.
+
+A related fix in `Replica.submit`: a client now accepts the result at an
+index only if the entry applied there is from the term it submitted in.
+Otherwise a deposed leader could hand its client the result of whatever
+the new leader wrote at that index.
+
+Caught intermittently by `test_data_survives_full_cluster_restart` and
+`test_majority_side_keeps_serving`. `test_replicas_converge` used to skip
+keys a replica was missing; it now requires every replica's map to equal
+the committed writes, and fails on the old code.
 
 ---
 

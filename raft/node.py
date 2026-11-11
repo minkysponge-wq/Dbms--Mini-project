@@ -744,12 +744,23 @@ class RaftNode:
                 entry = self.log[self.last_applied]
                 msg = ApplyMsg(command=entry.command, index=entry.index,
                                term=entry.term)
-            try:
-                db.execute(
-                    "UPDATE node SET last_applied = %s WHERE node_id = %s",
-                    (msg.index, self.me))
-                if self._apply_fn is not None:
-                    self._apply_fn(msg)
-            except Exception:
-                pass
+            # An entry must never be skipped: a replica that misses one write
+            # diverges for good. So last_applied is only recorded once the
+            # apply has succeeded (a state-changing apply records it inside
+            # its own transaction), and a failed apply is retried. Five
+            # nodes applying the same entry at once can deadlock in InnoDB
+            # on shared rows such as `client`; the victim simply retries.
+            delay = 0.02
+            while not self._dead.is_set():
+                try:
+                    if self._apply_fn is not None:
+                        self._apply_fn(msg)
+                    db.execute(
+                        "UPDATE node SET last_applied = GREATEST(last_applied, %s) "
+                        "WHERE node_id = %s",
+                        (msg.index, self.me))
+                    break
+                except Exception:
+                    time.sleep(delay)
+                    delay = min(delay * 2, 0.5)
         db.close_connection()

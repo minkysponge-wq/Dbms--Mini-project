@@ -129,23 +129,29 @@ class TestReplication(RaftTestCase):
         self.assertGreaterEqual(self.cluster.wait_for_leader(20), 0)
 
         clerk = self.cluster.clerk()
+        expected = {}
         for i in range(4):
-            clerk.put(f"conv{i}", f"v{i}")
-        time.sleep(3)
+            self.assertTrue(clerk.put(f"conv{i}", f"v{i}"))
+            expected[f"conv{i}"] = f"v{i}"
 
-        snapshots = []
-        for node_id in range(5):
-            replica = self.cluster.replica(node_id)
-            if replica is not None:
-                snapshots.append((node_id, replica.store.snapshot()))
+        # Every replica must end up with exactly the same map - a missing
+        # key is as much a divergence as a wrong value. Five nodes apply
+        # each entry concurrently and can deadlock in InnoDB; an apply that
+        # lost a deadlock must be retried, not skipped.
+        deadline = time.time() + 10
+        while True:
+            snapshots = [(node_id, self.cluster.replica(node_id).store.snapshot())
+                         for node_id in range(5)
+                         if self.cluster.replica(node_id) is not None]
+            if all(snap == expected for _, snap in snapshots):
+                break
+            if time.time() > deadline:
+                break
+            time.sleep(0.2)
 
-        reference_id, reference = snapshots[0]
-        for node_id, snap in snapshots[1:]:
-            for key, value in reference.items():
-                if key in snap:
-                    self.assertEqual(
-                        snap[key], value,
-                        f"nodes {reference_id} and {node_id} disagree on {key}")
+        for node_id, snap in snapshots:
+            self.assertEqual(snap, expected,
+                             f"node {node_id} diverged from the committed writes")
 
 
 class TestPersistence(RaftTestCase):

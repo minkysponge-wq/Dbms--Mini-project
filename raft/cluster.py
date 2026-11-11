@@ -26,7 +26,8 @@ class Replica:
                  event_sink: Callable[[dict], None] | None = None) -> None:
         self.node_id = node_id
         self.store = KVStore(node_id)
-        self._waiters: dict[int, threading.Event] = {}
+        # index -> (event, term the command was submitted in)
+        self._waiters: dict[int, tuple[threading.Event, int]] = {}
         self._results: dict[int, dict] = {}
         self._waiters_lock = threading.Lock()
 
@@ -44,25 +45,35 @@ class Replica:
     def _on_apply(self, msg: ApplyMsg) -> None:
         result = self.store.apply(msg)
         with self._waiters_lock:
-            ev = self._waiters.get(msg.index)
-            if ev is not None:
-                self._results[msg.index] = result
+            waiter = self._waiters.get(msg.index)
+            if waiter is not None:
+                ev, term = waiter
+                # A deposed leader's entry can be overwritten by the new
+                # leader's entry at the same index. Only the entry from the
+                # term we submitted in is ours; anything else means our
+                # command was lost and the client must retry elsewhere.
+                if msg.term == term:
+                    self._results[msg.index] = result
+                else:
+                    self._results[msg.index] = {
+                        "ok": False, "err": "lost_leadership"}
                 ev.set()
 
     def submit(self, cmd: Command, timeout: float = 5.0) -> dict[str, Any]:
         """Replicate one command and wait for it to be applied here."""
-        index, _, is_leader = self.raft.start(cmd)
+        index, term, is_leader = self.raft.start(cmd)
         if not is_leader:
             return {"ok": False, "err": "not_leader"}
 
         ev = threading.Event()
         with self._waiters_lock:
-            self._waiters[index] = ev
+            self._waiters[index] = (ev, term)
         try:
             if not ev.wait(timeout):
                 return {"ok": False, "err": "timeout"}
             with self._waiters_lock:
-                return self._results.get(index, {"ok": True})
+                return self._results.get(
+                    index, {"ok": False, "err": "lost_leadership"})
         finally:
             with self._waiters_lock:
                 self._waiters.pop(index, None)
