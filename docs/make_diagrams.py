@@ -309,12 +309,17 @@ def build_schema_diagram(svg_path: str) -> None:
 
 
 def main() -> None:
-    er_png = os.path.join(OUT_DIR, "er_diagram.png")
+    """Generate the relational schema diagram.
+
+    The ER diagram is NOT generated here any more. It lives in
+    make_er_diagram.py, which models the five many-to-many and ternary
+    associations as relationships rather than as pre-resolved entity
+    boxes, and emits a draw.io file alongside the PNG. The ER builder
+    below is kept only because the RELATIONS declaration it shares is
+    still the source for the schema diagram.
+    """
     schema_svg = os.path.join(OUT_DIR, "relational_schema.svg")
     schema_png = os.path.join(OUT_DIR, "relational_schema.png")
-
-    build_er_diagram(er_png)
-    print("wrote", er_png)
 
     build_schema_diagram(schema_svg)
     # LibreOffice renders the SVG reliably without a cairo dependency.

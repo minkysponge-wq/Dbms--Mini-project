@@ -11,19 +11,24 @@ to be taken on trust.
 
 `docs/er_diagram.png`
 
-17 entities. Weak entities are shaded and labelled: `LOG_ENTRY`,
-`KV_STATE`, `CLIENT_SESSION`, `REPLICATION_STATE`, `VOTE`, `USER_ROLE`,
-`ROLE_PERMISSION`. Crow's-foot cardinality on every relationship.
+`docs/er_diagram.drawio` is the editable draw.io source; the PNG is its
+snapshot. Both come from one model in `make_er_diagram.py`.
 
-Two recursive relationships, both real rather than decorative:
+**12 entities**, with `LOG_ENTRY` and `KV_STATE` marked weak (double
+border, orange) because each is owned by a `NODE` — every replica keeps
+its own copy.
 
-- `NODE` → `NODE` (`voted_for`, and `tracks` resolved into
-  `REPLICATION_STATE` where `leader_id` and `follower_id` both reference
-  `node`)
-- `APP_ROLE` → `APP_ROLE` (`parent_role_id`, the role hierarchy)
+**5 relationships drawn as diamonds**, because each maps to a relation
+of its own rather than being pre-resolved into a box: `VOTE` (ternary),
+`REPLICATION_STATE`, `CLIENT_SESSION`, `USER_ROLE`, `ROLE_PERMISSION`.
+These are the answer to the template's "relations that are not entities"
+section — see `SCHEMA.md` §2a.
 
-Regenerate with `python docs/make_diagrams.py` — both diagrams are built
-from one declaration, so they cannot drift apart.
+Three recursive relationships, all load-bearing: `NODE` votes for
+`NODE`; `NODE` tracks `NODE` as leader and follower; `APP_ROLE` inherits
+from `APP_ROLE`.
+
+Regenerate with `python docs/make_er_diagram.py`.
 
 ## 2. Relational schema with keys, relationships, constraints — 3 marks
 
@@ -227,7 +232,7 @@ Yours to earn. What helps:
 
 | # | Criterion | Max | Evidence |
 |---|---|---|---|
-| 1 | ER diagram | 2 | 17 entities, weak entities marked, 2 recursive relationships |
+| 1 | ER diagram | 2 | draw.io source + PNG; 12 entities, 5 relationship-relations, 3 recursive |
 | 2 | Relational schema | 3 | Schema diagram + FD and BCNF analysis |
 | 3 | DDL with constraints | 4 | 17 tables, 23 FKs, 6 checks, 7 unique, 24 indexes |
 | 4 | NoSQL/Vector creation | 4 | MongoDB collection, 5 indexes, 128-d embeddings |

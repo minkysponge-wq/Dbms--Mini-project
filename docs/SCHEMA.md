@@ -2,63 +2,65 @@
 
 ![ER diagram](er_diagram.png)
 
+*`er_diagram.drawio` opens in [draw.io](https://app.diagrams.net) if you
+want to rearrange it or export at a different size. Both it and the PNG
+are generated from one model by `make_er_diagram.py`, so they cannot
+drift apart.*
+
 ![Relational schema](relational_schema.png)
 
 ---
 
 ## 1. Entities
 
-17 relations in four groups.
+**Twelve entities.** Weak entities are marked and are drawn with a
+double border in the diagram.
 
 ### Raft protocol state
 
-| Relation | Weak? | Description |
+| Entity | Weak? | Description |
 |---|---|---|
 | `NODE` | no | A server in the cluster: address, role, current term, vote, commit and apply progress |
 | `TERM` | no | A logical clock interval. Terms increase monotonically; each has at most one leader |
-| `VOTE` | **yes** | A vote cast by one node, in one term, for one candidate |
 | `LOG_ENTRY` | **yes** | One entry in a node's replicated log |
-| `REPLICATION_STATE` | **yes** | A leader's per-follower progress |
 | `SNAPSHOT` | no | A compacted checkpoint up to a log index |
 
 ### Applied state machine
 
-| Relation | Weak? | Description |
+| Entity | Weak? | Description |
 |---|---|---|
 | `KV_STATE` | **yes** | The key-value pairs produced by applying committed entries |
 | `CLIENT` | no | Client identity, cluster-wide |
-| `CLIENT_SESSION` | **yes** | Per-replica deduplication state for a client |
 | `CLIENT_REQUEST` | no | One client command and its outcome |
 
 ### Access control
 
-| Relation | Weak? | Description |
+| Entity | Weak? | Description |
 |---|---|---|
 | `APP_USER` | no | A dashboard user |
 | `APP_ROLE` | no | A role, with `parent_role_id` forming a hierarchy |
 | `APP_PERMISSION` | no | A named capability |
-| `USER_ROLE` | **yes** | Bridge: users to roles |
-| `ROLE_PERMISSION` | **yes** | Bridge: roles to permissions |
 | `AUTH_SESSION` | no | An issued login session |
 
 ### Auditing
 
-| Relation | Weak? | Description |
+| Entity | Weak? | Description |
 |---|---|---|
 | `NODE_EVENT` | no | Written by triggers on every role, term, commit or liveness change |
 
-### Why five relations are weak
+### Why `LOG_ENTRY` and `KV_STATE` are weak
 
-`LOG_ENTRY`, `KV_STATE` and `CLIENT_SESSION` are each owned by a `NODE`
-because **every replica keeps its own independent copy**. The same
-`log_index` on two nodes may legitimately hold different entries until
-the logs converge, so the index alone cannot identify an entry.
+Both are owned by a `NODE`, because **every replica keeps its own
+independent copy**. The same `log_index` on two nodes may legitimately
+hold different entries until the logs converge, so the index alone
+cannot identify an entry. Their keys are `(node_id, log_index)` and
+`(node_id, key_name)`.
 
-This is not a modelling nicety. An early version keyed `CLIENT_SESSION`
-on `client_id` alone; all five replicas then shared one deduplication
-row, and nodes that had not yet applied a command treated it as a
-duplicate and skipped it. The replicas diverged silently. See
-`DESIGN.md` §7.
+This is not a modelling nicety. An early version of the schema keyed the
+client session table on `client_id` alone; all five replicas then shared
+one deduplication row, and nodes that had not yet applied a command
+treated it as a duplicate and skipped it. The replicas diverged
+silently. See `DESIGN.md` §7.
 
 ### Non-simple attributes
 
@@ -82,29 +84,75 @@ fields.
 
 ## 2. Relationships
 
+### Simple relationships (1:N)
+
+Drawn as labelled connectors carrying their cardinality.
+
 | Relationship | Cardinality | Notes |
 |---|---|---|
+| TERM elects NODE | 1:0..1 | a split vote elects nobody |
 | NODE stores LOG_ENTRY | 1:N | identifying |
+| TERM stamps LOG_ENTRY | 1:N | |
 | NODE applies KV_STATE | 1:N | identifying |
-| NODE maintains CLIENT_SESSION | 1:N | identifying |
-| NODE casts VOTE | 1:N | identifying |
 | NODE captures SNAPSHOT | 1:N | |
 | NODE emits NODE_EVENT | 1:N | |
-| **NODE tracks NODE** | M:N | **recursive**, resolved into `REPLICATION_STATE` |
-| **NODE voted_for NODE** | N:1 | **recursive**, self-referencing FK |
-| TERM elects NODE | 1:0..1 | a split vote elects nobody |
-| TERM scopes VOTE | 1:N | |
-| TERM stamps LOG_ENTRY | 1:N | |
 | CLIENT issues CLIENT_REQUEST | 1:N | |
-| CLIENT tracked by CLIENT_SESSION | 1:N | one row per replica |
+| APP_USER owns CLIENT | 1:N | |
+| APP_USER opens AUTH_SESSION | 1:N | |
+| APP_USER owns KV_STATE key | 1:N | optional |
 | **APP_ROLE inherits APP_ROLE** | N:1 | **recursive**, the role hierarchy |
-| APP_USER holds APP_ROLE | M:N | via `USER_ROLE` |
-| APP_ROLE grants APP_PERMISSION | M:N | via `ROLE_PERMISSION` |
+| **NODE voted_for NODE** | N:1 | **recursive**, self-referencing |
 
-Three recursive relationships, all load-bearing. `REPLICATION_STATE`
-resolves an M:N whose two participating entity sets are both `NODE`, with
-`leader_id` and `follower_id` as distinct foreign keys into the same
-relation.
+### Relationships that carry their own attributes
+
+Drawn as diamonds, because each one maps to a relation of its own.
+
+| Relationship | Degree | Participants | Attributes |
+|---|---|---|---|
+| **VOTE** | ternary, M:N | TERM, NODE (voter), NODE (candidate) | granted, candidate_last_index, candidate_last_term, voted_at |
+| **REPLICATION_STATE** | M:N, recursive | NODE (leader), NODE (follower) | next_index, match_index, last_contact |
+| **CLIENT_SESSION** | M:N | NODE, CLIENT | last_seq_seen, last_result, updated_at |
+| **USER_ROLE** | M:N | APP_USER, APP_ROLE | granted_at |
+| **ROLE_PERMISSION** | M:N | APP_ROLE, APP_PERMISSION | — |
+
+Three recursive relationships, all load-bearing: a node votes for a
+node, a leader tracks followers, and a role inherits from a role. In
+`REPLICATION_STATE` the two participating entity sets are both `NODE`,
+so `leader_id` and `follower_id` become distinct foreign keys into the
+same relation.
+
+`VOTE` is genuinely **ternary**: a vote is meaningless without all three
+of the term it was cast in, the node casting it and the node receiving
+it. Modelling it as a binary relationship between two of the three would
+lose the constraint that a node votes once *per term*.
+
+---
+
+## 2a. Relations that are not entities in the ER model
+
+Mapping the ER model to the relational model produces five relations
+that were **relationships**, not entities. Each arises because a
+many-to-many (or ternary) relationship cannot be represented by a
+foreign key on either participant.
+
+| Relation | Came from | Primary key | Why it is a relation |
+|---|---|---|---|
+| `VOTE` | the ternary VOTE relationship | `(term_number, voter_id)` | A ternary relationship always maps to a relation. The key is narrower than all three participants on purpose: it is what limits a node to one vote per term |
+| `REPLICATION_STATE` | NODE tracks NODE | `(leader_id, follower_id)` | Recursive M:N; neither node can hold a single foreign key to the other |
+| `CLIENT_SESSION` | NODE : CLIENT | `(node_id, client_id)` | M:N, because every replica tracks every client independently |
+| `USER_ROLE` | APP_USER holds APP_ROLE | `(user_id, role_id)` | M:N bridge |
+| `ROLE_PERMISSION` | APP_ROLE grants APP_PERMISSION | `(role_id, permission_id)` | M:N bridge |
+
+The relational model therefore has **17 relations**: the 12 entities
+plus these 5.
+
+Note what `VOTE`'s key does. The relationship is ternary, so the
+mechanical mapping would key it on all three participants
+`(term_number, voter_id, candidate_id)`. Keying it on
+`(term_number, voter_id)` instead is a deliberate tightening: it makes a
+second vote by the same node in the same term violate the primary key,
+which is precisely Raft's election-safety property. The constraint is
+stronger than the ER model alone requires, and that is the point.
 
 ---
 
