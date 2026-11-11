@@ -196,15 +196,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200 if ok else 503,
                                   {"ok": ok, "key": key, "op": op})
 
-            if route == "/api/node/kill":
+            if route in ("/api/node/kill", "/api/node/restart"):
                 node_id = int(body.get("node_id", -1))
+                if not 0 <= node_id < CLUSTER.size:
+                    return self._send(400, {
+                        "error": f"no node {node_id}; nodes are 0 to "
+                                 f"{CLUSTER.size - 1}"})
+
+            if route == "/api/node/kill":
                 CLUSTER.crash(node_id)
                 self._emit("crash", node_id,
                            f"node {node_id} was crashed from the dashboard")
                 return self._send(200, {"ok": True, "node_id": node_id})
 
             if route == "/api/node/restart":
-                node_id = int(body.get("node_id", -1))
                 CLUSTER.restart(node_id)
                 self._emit("restart", node_id,
                            f"node {node_id} was restarted from the dashboard "

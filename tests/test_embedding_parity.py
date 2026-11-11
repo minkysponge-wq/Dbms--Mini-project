@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -48,11 +49,12 @@ class TestEmbeddingParity(unittest.TestCase):
 
     def test_vectors_match_exactly(self) -> None:
         script = (
-            f"import {{ embed }} from {json.dumps(JS_MODULE)};\n"
+            f"import {{ embed }} from {json.dumps(pathlib.Path(JS_MODULE).as_uri())};\n"
             f"const texts = {json.dumps(SAMPLES)};\n"
             "console.log(JSON.stringify(texts.map(t => embed(t))));\n"
         )
-        with tempfile.NamedTemporaryFile("w", suffix=".mjs", delete=False) as fh:
+        with tempfile.NamedTemporaryFile(
+                "w", suffix=".mjs", delete=False, encoding="utf-8") as fh:
             fh.write(script)
             path = fh.name
         try:

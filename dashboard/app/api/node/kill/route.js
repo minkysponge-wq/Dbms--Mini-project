@@ -25,6 +25,9 @@ export async function POST(request) {
     method: "POST",
     body: JSON.stringify({ node_id: Number(node_id) }),
   });
+  if (res.status === 400) {
+    return Response.json({ error: res.body?.error }, { status: 400 });
+  }
   if (!res.ok) {
     return Response.json(
       { error: "the cluster server is not reachable", detail: res.body?.error },
